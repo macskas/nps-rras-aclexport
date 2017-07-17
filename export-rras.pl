@@ -1,8 +1,12 @@
 #!/usr/bin/perl
 
+use strict;
+use warnings;
 use Socket;
 use XML::LibXML;
 use Getopt::Std;
+
+our ($opt_f,$opt_o);
 
 sub hex2ip()
 {
