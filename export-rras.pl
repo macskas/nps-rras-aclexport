@@ -225,7 +225,7 @@ sub print_out_csv()
     	my $policy_str = 0;
 	if (scalar @{$ret->{"$name"}->{'policy'}}) {
 	    $policy_str = join(" && ", @{$ret->{"$name"}->{'policy'}});
-	    $policy_str =~ s/"/\\"/g;
+	    $policy_str =~ s/"/""/g; #"
 	}
 
 	foreach my $cur (@{$ret->{"$name"}->{'list'}}) {
