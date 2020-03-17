@@ -91,6 +91,32 @@ sub decode_acl()
     return $acllist;
 }
 
+sub nofilter_acl()
+{
+    my $acllist = [];
+    my $src_ip = "0.0.0.0";
+    my $src_netmask = "0.0.0.0";
+    my $dst_ip = "0.0.0.0";
+    my $dst_netmask = "0.0.0.0";
+    my $proto = "ANY";
+    my $proto_ext = "-";
+    my $src_port = -1;
+    my $dst_port = -1;
+
+    push(@{$acllist}, {
+        'src_ip'		=> $src_ip,
+        'src_netmask'	=> $src_netmask,
+        'dst_ip'		=> $dst_ip,
+        'dst_netmask'	=> $dst_netmask,
+        'proto'		=> $proto,
+        'proto_ext'		=> $proto_ext,
+        'src_port'		=> $src_port,
+        'dst_port'		=> $dst_port
+    });
+    
+    return $acllist;
+}
+
 sub do_error()
 {
     my $msg = shift || "unknown";
@@ -117,15 +143,44 @@ sub parse_xml()
 	    foreach my $prop ($child->getElementsByTagName('Properties')) {
 		my $parent = $prop->getParentNode;
 		my $connectionName = $parent->getAttribute("name");
+		my $filter_found = 0;
+
 		foreach my $rasfilter ($prop->getElementsByTagName("msRASFilter")) {
+		    $filter_found = 1;
 		    my $binhex = $rasfilter->textContent;
 		    $out->{"$connectionName"} = {};
 		    $out->{"$connectionName"}->{'name'} = $connectionName;
 		    $out->{"$connectionName"}->{'list'} = &decode_acl($binhex);
+		    $out->{"$connectionName"}->{'policy'} = [];
+		}
+		if (!$filter_found) {
+		    $out->{"$connectionName"} = {};
+		    $out->{"$connectionName"}->{'name'} = $connectionName;
+		    $out->{"$connectionName"}->{'list'} = &nofilter_acl();
+		    $out->{"$connectionName"}->{'policy'} = [];
+		}
+	
+	    }
+	}
+    }
+    my @networkpolicies = $doc->getElementsByTagName('NetworkPolicy');
+    foreach my $networkpolicy (@networkpolicies) {
+	my @children = $networkpolicy->getElementsByTagName('Children');
+	foreach my $child (@children) {
+	    foreach my $prop ($child->getElementsByTagName('Properties')) {
+		my $parent = $prop->getParentNode;
+		my $connectionName = $parent->getAttribute("name");
+		my $filter_found = 0;
+		foreach my $msnp ($prop->getElementsByTagName("msNPConstraint")) {
+		    if (!defined($out->{"$connectionName"})) {
+			next;
+		    }
+		    push(@{$out->{"$connectionName"}->{'policy'}}, $msnp->textContent);
 		}
 	    }
 	}
     }
+
     return $out;
 }
 
@@ -133,7 +188,19 @@ sub print_out_text()
 {
     my $ret = shift || {};
     foreach my $name (sort keys %{$ret}) {
-	print "- '$name'\n";
+	my $policy_str = 0;
+	if (scalar @{$ret->{"$name"}->{'policy'}}) {
+	    $policy_str = join(" && ", @{$ret->{"$name"}->{'policy'}});
+	}
+	if ($policy_str) {
+	    print "- '$name' ($policy_str)\n";
+	} else {
+	    print "- '$name'\n";
+	}
+	foreach my $cur (@{$ret->{"$name"}->{'policy'}}) {
+	    print "$cur\n";
+	}
+
 	printf("%15s %15s %15s %15s %10s %4s %10s %10s\n", "src-ip", "src-netmask", "dst-ip", "dst-netmask", "protocol", "protocol-ext", "src-port", "dst-port");
 	foreach my $cur (@{$ret->{"$name"}->{'list'}}) {
 	    printf(
@@ -153,12 +220,19 @@ sub print_out_text()
 sub print_out_csv()
 {
     my $ret = shift || {};
-    printf("%s,%s,%s,%s,%s,%s,%s,%s\n", "name", "src-ip", "src-netmask", "dst-ip", "dst-netmask", "protocol", "protocol-ext", "src-port", "dst-port");
+    printf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", "name", "policy", "src-ip", "src-netmask", "dst-ip", "dst-netmask", "protocol", "protocol-ext", "src-port", "dst-port");
     foreach my $name (sort keys %{$ret}) {
+    	my $policy_str = 0;
+	if (scalar @{$ret->{"$name"}->{'policy'}}) {
+	    $policy_str = join(" && ", @{$ret->{"$name"}->{'policy'}});
+	    $policy_str =~ s/"/\\"/g;
+	}
+
 	foreach my $cur (@{$ret->{"$name"}->{'list'}}) {
 	    printf(
-		"\"%s\",%s,%s,%s,%s,%s,%s,%d,%d\n",
+		"\"%s\",\"%s\",%s,%s,%s,%s,%s,%s,%d,%d\n",
 		$name,
+		$policy_str,
 		$cur->{'src_ip'}, $cur->{'src_netmask'},
 		$cur->{'dst_ip'}, $cur->{'dst_netmask'},
 		$cur->{'proto'},
@@ -174,17 +248,23 @@ sub print_out_grep()
 {
     my $ret = shift || {};
     foreach my $name (sort keys %{$ret}) {
-	printf("%30s %15s %15s %15s %15s %10s %4s %10s %10s\n", "name", "src-ip", "src-netmask", "dst-ip", "dst-netmask", "protocol", "protocol-ext", "src-port", "dst-port");
+    	my $policy_str = "";
+	if (scalar @{$ret->{"$name"}->{'policy'}}) {
+	    $policy_str = join(" && ", @{$ret->{"$name"}->{'policy'}});
+	}
+
+	printf("%30s %15s %15s %15s %15s %10s %12s %10s %10s %s\n", "name", "src-ip", "src-netmask", "dst-ip", "dst-netmask", "protocol", "protocol-ext", "src-port", "dst-port", "policy");
 	foreach my $cur (@{$ret->{"$name"}->{'list'}}) {
 	    printf(
-		"%30s %15s %15s %15s %15s %10s %4s %10d %10d\n",
+		"%30s %15s %15s %15s %15s %10s %12s %10d %10d %s\n",
 		$name,
 		$cur->{'src_ip'}, $cur->{'src_netmask'},
 		$cur->{'dst_ip'}, $cur->{'dst_netmask'},
 		$cur->{'proto'},
 		$cur->{'proto_ext'},
 		$cur->{'src_port'},
-		$cur->{'dst_port'}
+		$cur->{'dst_port'},
+		$policy_str
 	    );
 	}
 	print "\n";
